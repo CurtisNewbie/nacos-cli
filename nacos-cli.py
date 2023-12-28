@@ -13,27 +13,32 @@ class BaseCommand():
         self.access_token = access_token
         self.namespace = namespace
 
-def login(host, username, password):
-    res = requests.post(f"{host}/nacos/v1/auth/login", data={"username" : username, "password": password })
+def login(session: requests.Session, host: str, username: str, password: str):
+    res = session.post(f"{host}/nacos/v1/auth/login", data={"username" : username, "password": password })
     if res.status_code != 200:
         print(res.text)
         return None
     return json.loads(res.text)
 
 
-def list_intances(host, access_token, service_name, namespace, group="DEFAULT_GROUP", cluster="DEFAULT", limit=200, page=1):
-    res = requests.get(
+def list_intances(session: requests.Session, host: str, access_token: str, service_name: str, namespace: str,
+                   group="DEFAULT_GROUP", cluster="DEFAULT", limit=200, page=1):
+    res = session.get(
         url=f'{host}/nacos/v1/ns/catalog/instances?accessToken={access_token}&serviceName={service_name}&clusterName={cluster}&groupName={group}&pageSize={limit}&pageNo={page}&namespaceId={namespace}',
         timeout=1000).text
     if res.startswith("caused"): return None
     return json.loads(res)
 
 
-def log_instances(host, access_token, service_name, namespace):
-    res = list_intances(host, access_token, service_name, namespace)
+def log_instances(session: requests.Session, host: str, access_token: str, service_name: str, namespace: str, lock: threading.Lock,
+                  unhealthy_services: list[str]):
+    res = list_intances(session, host, access_token, service_name, namespace)
     if not res:
-        print(f"{str(datetime.datetime.now())} {service_name:<20} has total {0:<2} instances")
+        log = f"{str(datetime.datetime.now())} {service_name:<20} has total {0:<2} instances"
+        # print(log)
+        with lock: unhealthy_services.append(log)
         return
+
     listed = res['list']
     healthy = []
     unhealthy = []
@@ -54,7 +59,22 @@ def log_instances(host, access_token, service_name, namespace):
         if weight in weights: weights[weight].append(l['ip'])
         else: weights[weight] = [l['ip']]
 
-    print(f'{str(datetime.datetime.now())} {service_name:<20} has total {count:<2} instances, {len(healthy)} healthy, {len(unhealthy)} unhealthy, {len(enabled)} enabled, {len(disabled)} disabled, weights: {weights}')
+    weights_str = "{ "
+    sorted_weights_keys = sorted(weights.keys())
+    for i in range(len(sorted_weights_keys)):
+        weights_str += str(sorted_weights_keys[i]) + ": " + str(weights[sorted_weights_keys[i]])
+        if i < len(sorted_weights_keys) - 1: weights_str += ", "
+    weights_str += " }"
+
+    log = f'{str(datetime.datetime.now())} {service_name:<20} has total {count:<2} instances, {len(healthy)} healthy, {len(unhealthy)} unhealthy, {len(enabled)} enabled, {len(disabled)} disabled, weights: {weights_str}'
+    weight_above_zero = True
+    for k in weights:
+        if float(k) <= 0.0: weight_above_zero = False
+
+    if not weight_above_zero or len(listed) < 1 or len(unhealthy) > 0 or len(disabled) > 0:
+        with lock: unhealthy_services.append(log)
+    else:
+        print(log)
 
 if __name__ == '__main__':
 
@@ -68,7 +88,8 @@ if __name__ == '__main__':
     ap.add_argument('--watch', action="store_true", help='enable watch mode')
     args = ap.parse_args()
 
-    login_res = login(args.host, args.username, args.password)
+    session = requests.Session()
+    login_res = login(session, args.host, args.username, args.password)
     if not login_res:
         print("Login failed")
         exit(1)
@@ -84,14 +105,27 @@ if __name__ == '__main__':
         if not args.services: exit(0)
         watch = args.watch
         services = args.services.split(",")
-        loop = True
-        while loop:
+
+        while True:
+            lock = threading.Lock()
+            unhealthy_services = []
             threads = []
+
             for service_name in services:
-                threads.append(threading.Thread(target=log_instances, args=(cred.host, cred.access_token, service_name, cred.namespace)))
+                task = threading.Thread(target=log_instances,
+                                         args=(session, cred.host, cred.access_token, service_name, cred.namespace,
+                                               lock, unhealthy_services))
+                threads.append(task)
             for t in threads: t.start()
             for t in threads: t.join()
+            if len(unhealthy_services) > 0:
+                print(f"\nFound {len(unhealthy_services)} services with unhealthy instances")
+                for log in unhealthy_services: print(log)
+            print()
+
             threads = []
+            unhealthy_services = []
+
+            if not watch: break
             time.sleep(1)
-            if not watch: loop = False;
 
