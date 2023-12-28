@@ -24,14 +24,15 @@ def login(session: requests.Session, host: str, username: str, password: str):
 def list_intances(session: requests.Session, host: str, access_token: str, service_name: str, namespace: str,
                    group="DEFAULT_GROUP", cluster="DEFAULT", limit=200, page=1):
     res = session.get(
-        url=f'{host}/nacos/v1/ns/catalog/instances?accessToken={access_token}&serviceName={service_name}&clusterName={cluster}&groupName={group}&pageSize={limit}&pageNo={page}&namespaceId={namespace}',
+        url=f'{host}/nacos/v1/ns/catalog/instances?accessToken={access_token}&serviceName={service_name}' \
+            f'&clusterName={cluster}&groupName={group}&pageSize={limit}&pageNo={page}&namespaceId={namespace}',
         timeout=1000).text
     if res.startswith("caused"): return None
     return json.loads(res)
 
 
-def log_instances(session: requests.Session, host: str, access_token: str, service_name: str, namespace: str, lock: threading.Lock,
-                  unhealthy_services: list[str]):
+def log_instances(session: requests.Session, host: str, access_token: str, service_name: str, namespace: str,
+                  lock: threading.Lock, unhealthy_services: list[str]):
     res = list_intances(session, host, access_token, service_name, namespace)
     if not res:
         log = f"{str(datetime.datetime.now())} {service_name:<20} has total {0:<2} instances"
@@ -66,7 +67,8 @@ def log_instances(session: requests.Session, host: str, access_token: str, servi
         if i < len(sorted_weights_keys) - 1: weights_str += ", "
     weights_str += " }"
 
-    log = f'{str(datetime.datetime.now())} {service_name:<20} has total {count:<2} instances, {len(healthy)} healthy, {len(unhealthy)} unhealthy, {len(enabled)} enabled, {len(disabled)} disabled, weights: {weights_str}'
+    log = f'{str(datetime.datetime.now())} {service_name:<20} has total {count:<2} instances, {len(healthy)} healthy, ' \
+        f'{len(unhealthy)} unhealthy, {len(enabled)} enabled, {len(disabled)} disabled, weights: {weights_str}'
     weight_above_zero = True
     for k in weights:
         if float(k) <= 0.0: weight_above_zero = False
@@ -78,7 +80,8 @@ def log_instances(session: requests.Session, host: str, access_token: str, servi
 
 if __name__ == '__main__':
 
-    ap = argparse.ArgumentParser(description="Nacos Cli by Yongjie.Zhuang", formatter_class=argparse.RawTextHelpFormatter)
+    ap = argparse.ArgumentParser(description="Nacos Cli by Yongjie.Zhuang",
+                                 formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument('--host', type=str, help='host', required=True)
     ap.add_argument('--username', type=str, help='username', required=True)
     ap.add_argument('--password', type=str, help='password', required=True)
@@ -113,8 +116,8 @@ if __name__ == '__main__':
 
             for service_name in services:
                 task = threading.Thread(target=log_instances,
-                                         args=(session, cred.host, cred.access_token, service_name, cred.namespace,
-                                               lock, unhealthy_services))
+                                         args=(session, cred.host, cred.access_token, service_name,
+                                               cred.namespace, lock, unhealthy_services))
                 threads.append(task)
             for t in threads: t.start()
             for t in threads: t.join()
